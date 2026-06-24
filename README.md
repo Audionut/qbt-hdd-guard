@@ -352,17 +352,21 @@ Defaults:
 --extreme-low-speed-min-payload 1MiB
 ```
 
-A long-term low-speed HDD ban catches peers that build strong historical evidence but may have a small current-window payload:
+A long-term low-speed HDD ban catches peers that build strong rolling slow-burn evidence but may have a small current-window payload:
 
 ```text
 current average speed below --low-speed-threshold
-historical low-speed time >= --long-term-low-speed-time
-historical ETW matched sessions >= --long-term-low-speed-min-etw-sessions
-historical ETW read bytes >= --long-term-low-speed-min-etw-bytes
-historical uploaded bytes >= --long-term-low-speed-min-uploaded
-recent medium/high ETW evidence exists
+rolling low-speed time >= --long-term-low-speed-time
+rolling qualified ETW sessions >= --long-term-low-speed-min-etw-sessions
+rolling ETW read bytes >= --long-term-low-speed-min-etw-bytes
+rolling uploaded bytes >= --long-term-low-speed-min-uploaded
+rolling ETW/upload ratio >= --slow-burn-min-etw-upload-ratio
+recent qualified medium/high ETW evidence exists
 not currently productive
+not offset by productive slow-burn credit
 ```
+
+The rolling slow-burn history is separate from broad reputation score. ETW sessions only qualify after `--slow-burn-min-etw-session-bytes`, so repeated zero-byte ETW matches do not build long-term ban evidence.
 
 Safety gates block bans when:
 
@@ -448,6 +452,18 @@ If an IP has zero-upload ETW activity-wake evidence but has not reached the bare
 
 Activity-wake audit details include `activity_wake_confidence`: `weak` for speed-backed active-transition only, `medium` when qB reports payload without ETW, and `high` when peer-local ETW reads are present.
 
+Terminal-piece repeat-upload bans target peers that report near-complete progress but keep receiving more data than their apparent remaining amount:
+
+```text
+--terminal-piece-progress 0.999
+--terminal-piece-ban-after 3
+--terminal-piece-window 7200
+--terminal-piece-min-payload 1MiB
+--terminal-piece-excess-ratio 2.0
+```
+
+This catches peers at 99.9%+ that repeatedly pull the last piece/range instead of completing. The rule estimates the peer's remaining bytes from qB's peer progress and torrent size, then counts one event each time uploaded bytes cross `max(--terminal-piece-min-payload, estimated_remaining * --terminal-piece-excess-ratio)`. The default ban requires 3 events inside the rolling window. If qB does not expose peer `progress` in `sync/torrentPeers`, this rule does nothing.
+
 ## Useful Examples
 
 Poll every 5s, treat under 2 KiB/s as low, ban only with ETW evidence:
@@ -512,10 +528,19 @@ python .\run_hdd_guard.py --password "YOUR_PASSWORD" --etw --bare-ip-bad-endpoin
 | `--ip-activity-wake-churn-min-speed` | `10KiB` | Minimum burst speed for one counted payload activity-wake session. Torrent active-transition events can count even if upload delta is missed. |
 | `--ip-activity-wake-churn-distinct-ports` | `3` | Distinct ports required before IP activity-wake bare-IP ban. |
 | `--ip-activity-wake-churn-all-distinct-ports-over` | `15` | Bare-IP activity-wake shortcut when every counted event uses a different port and the distinct-port count is greater than this value. `0` disables. |
-| `--long-term-low-speed-time` | `900` | Historical low-speed seconds required for long-term low-speed bans. |
-| `--long-term-low-speed-min-etw-sessions` | `100` | Historical matched ETW sessions required for long-term low-speed bans. |
-| `--long-term-low-speed-min-etw-bytes` | `256MiB` | Historical matched read bytes required for long-term low-speed bans. |
-| `--long-term-low-speed-min-uploaded` | `1MiB` | Historical uploaded bytes required for long-term low-speed bans. |
+| `--terminal-piece-progress` | `0.999` | Peer progress threshold for terminal-piece repeat-upload bans. `0` disables. |
+| `--terminal-piece-ban-after` | `3` | Terminal-piece repeat events required before exact `IP:port` ban. `0` disables. |
+| `--terminal-piece-window` | `7200` | Window seconds for terminal-piece repeat-upload events. |
+| `--terminal-piece-min-payload` | `1MiB` | Minimum upload bucket for one terminal-piece repeat event. |
+| `--terminal-piece-excess-ratio` | `2.0` | Multiplier against estimated remaining bytes for one terminal-piece repeat event. |
+| `--slow-burn-window` | `86400` | Rolling seconds retained for slow-burn long-term evidence. |
+| `--slow-burn-min-etw-session-bytes` | `1MiB` | Attributed ETW bytes required before one slow-burn ETW session qualifies. |
+| `--slow-burn-min-etw-upload-ratio` | `10.0` | Rolling ETW/upload ratio required for long-term low-speed bans. |
+| `--slow-burn-productive-credit-ratio` | `1.0` | Productive uploaded bytes ratio that blocks long-term slow-burn bans. |
+| `--long-term-low-speed-time` | `900` | Rolling low-speed seconds required for long-term low-speed bans. |
+| `--long-term-low-speed-min-etw-sessions` | `3` | Rolling qualified ETW sessions required for long-term low-speed bans. |
+| `--long-term-low-speed-min-etw-bytes` | `256MiB` | Rolling qualified read bytes required for long-term low-speed bans. |
+| `--long-term-low-speed-min-uploaded` | `4MiB` | Rolling low-speed uploaded bytes required for long-term low-speed bans. |
 | `--state-dir` | `.\state` | State/audit output dir. |
 | `--dry-run` | off | Log decisions without banning. |
 | `--ban-log-only` | off | Console logs only ban-level events. |

@@ -41,6 +41,7 @@ class QbtPoller:
                     save_path=str(_field(torrent, "save_path", "") or ""),
                     state=str(_field(torrent, "state", "") or ""),
                     amount_left=amount_left,
+                    size=int(_field(torrent, "size", _field(torrent, "total_size", 0)) or 0),
                 )
             )
         return out
@@ -67,6 +68,10 @@ class QbtPoller:
                     up_speed=int(_field(info, "up_speed", 0) or 0),
                     uploaded=int(_field(info, "uploaded", 0) or 0),
                     client=str(_field(info, "client", _field(info, "peer_id_client", "")) or ""),
+                    torrent_size=torrent.size,
+                    progress=_optional_float(_field(info, "progress", None)),
+                    downloaded=_optional_int(_field(info, "downloaded", None)),
+                    relevance=_optional_float(_field(info, "relevance", None)),
                     files=tuple(_coerce_files(_field(info, "files", ()))),
                 )
             )
@@ -113,6 +118,18 @@ def _coerce_files(value: Any) -> list[Any]:
 def _port_from_endpoint(endpoint: str) -> int | None:
     _, sep, port = endpoint.rpartition(":")
     return int(port) if sep and port.isdigit() else None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    return float(value)
 
 
 def _split_banned_ips(value: str) -> set[str]:

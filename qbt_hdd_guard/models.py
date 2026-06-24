@@ -64,10 +64,19 @@ class GuardConfig:
     ip_activity_wake_churn_min_speed: int = 10 * 1024
     ip_activity_wake_churn_distinct_ports: int = 3
     ip_activity_wake_churn_all_distinct_ports_over: int = 15
+    terminal_piece_progress: float = 0.999
+    terminal_piece_ban_after: int = 3
+    terminal_piece_window: float = 2 * 60 * 60
+    terminal_piece_min_payload: int = 1024 * 1024
+    terminal_piece_excess_ratio: float = 2.0
+    slow_burn_window: float = 24 * 60 * 60
+    slow_burn_min_etw_session_bytes: int = 1024 * 1024
+    slow_burn_min_etw_upload_ratio: float = 10.0
+    slow_burn_productive_credit_ratio: float = 1.0
     long_term_low_speed_time: float = 900.0
-    long_term_low_speed_min_etw_sessions: int = 100
+    long_term_low_speed_min_etw_sessions: int = 3
     long_term_low_speed_min_etw_bytes: int = 256 * 1024 * 1024
-    long_term_low_speed_min_uploaded: int = 1024 * 1024
+    long_term_low_speed_min_uploaded: int = 4 * 1024 * 1024
     etw_enabled: bool = False
     etw_helper: Path | None = None
     etw_required: bool = False
@@ -103,6 +112,7 @@ class TorrentInfo:
     save_path: str
     state: str
     amount_left: int
+    size: int = 0
 
 
 @dataclass(frozen=True)
@@ -115,6 +125,10 @@ class PeerSnapshot:
     up_speed: int
     uploaded: int
     client: str
+    torrent_size: int = 0
+    progress: float | None = None
+    downloaded: int | None = None
+    relevance: float | None = None
     files: tuple[Any, ...] = field(default_factory=tuple)
 
 

@@ -68,6 +68,15 @@ def main(argv: list[str] | None = None) -> int:
         ip_activity_wake_churn_min_speed=parse_size(args.ip_activity_wake_churn_min_speed),
         ip_activity_wake_churn_distinct_ports=args.ip_activity_wake_churn_distinct_ports,
         ip_activity_wake_churn_all_distinct_ports_over=args.ip_activity_wake_churn_all_distinct_ports_over,
+        terminal_piece_progress=args.terminal_piece_progress,
+        terminal_piece_ban_after=args.terminal_piece_ban_after,
+        terminal_piece_window=args.terminal_piece_window,
+        terminal_piece_min_payload=parse_size(args.terminal_piece_min_payload),
+        terminal_piece_excess_ratio=args.terminal_piece_excess_ratio,
+        slow_burn_window=args.slow_burn_window,
+        slow_burn_min_etw_session_bytes=parse_size(args.slow_burn_min_etw_session_bytes),
+        slow_burn_min_etw_upload_ratio=args.slow_burn_min_etw_upload_ratio,
+        slow_burn_productive_credit_ratio=args.slow_burn_productive_credit_ratio,
         long_term_low_speed_time=args.long_term_low_speed_time,
         long_term_low_speed_min_etw_sessions=args.long_term_low_speed_min_etw_sessions,
         long_term_low_speed_min_etw_bytes=parse_size(args.long_term_low_speed_min_etw_bytes),
@@ -165,10 +174,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ip-activity-wake-churn-min-speed", default="10KiB")
     parser.add_argument("--ip-activity-wake-churn-distinct-ports", type=int, default=3)
     parser.add_argument("--ip-activity-wake-churn-all-distinct-ports-over", type=int, default=15)
+    parser.add_argument("--terminal-piece-progress", type=float, default=0.999)
+    parser.add_argument("--terminal-piece-ban-after", type=int, default=3)
+    parser.add_argument("--terminal-piece-window", type=float, default=7200.0)
+    parser.add_argument("--terminal-piece-min-payload", default="1MiB")
+    parser.add_argument("--terminal-piece-excess-ratio", type=float, default=2.0)
+    parser.add_argument("--slow-burn-window", type=float, default=86400.0)
+    parser.add_argument("--slow-burn-min-etw-session-bytes", default="1MiB")
+    parser.add_argument("--slow-burn-min-etw-upload-ratio", type=float, default=10.0)
+    parser.add_argument("--slow-burn-productive-credit-ratio", type=float, default=1.0)
     parser.add_argument("--long-term-low-speed-time", type=float, default=900.0)
-    parser.add_argument("--long-term-low-speed-min-etw-sessions", type=int, default=100)
+    parser.add_argument("--long-term-low-speed-min-etw-sessions", type=int, default=3)
     parser.add_argument("--long-term-low-speed-min-etw-bytes", default="256MiB")
-    parser.add_argument("--long-term-low-speed-min-uploaded", default="1MiB")
+    parser.add_argument("--long-term-low-speed-min-uploaded", default="4MiB")
 
     parser.add_argument("--state-dir")
     parser.add_argument("--dry-run", action="store_true")

@@ -357,20 +357,22 @@ class EngineTests(unittest.TestCase):
         engine, _ = self.make_engine(
             min_payload=1024 * 1024,
             long_term_low_speed_time=900,
-            long_term_low_speed_min_etw_sessions=100,
+            long_term_low_speed_min_etw_sessions=1,
             long_term_low_speed_min_etw_bytes=256 * 1024 * 1024,
             long_term_low_speed_min_uploaded=1024 * 1024,
         )
-        rep = engine.state.reputation("1.2.3.4:6881")
-        rep.update(
+        engine.slow_burn_history["1.2.3.4:6881"] = [
             {
-                "total_low_speed_seconds": 1051.0,
-                "etw_matched_session_count": 445,
-                "total_etw_read_bytes": 353_959_936,
-                "total_uploaded": 1_671_168,
-                "last_medium_evidence": 100.0,
+                "ts": 100.0,
+                "duration": 1051.0,
+                "low": True,
+                "bad": True,
+                "productive": False,
+                "uploaded": 10 * 1024 * 1024,
+                "etw_bytes": 353_959_936,
+                "qualified_etw": True,
             }
-        )
+        ]
         mapper = self.mapper()
         engine.observe([self.peer(uploaded=0, up_speed=1200)], 0)
         engine.observe([self.peer(uploaded=393216, up_speed=1300)], 11)
@@ -378,6 +380,7 @@ class EngineTests(unittest.TestCase):
         decisions = engine.decisions(11)
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0].reason, "long-term-low-speed")
+        self.assertEqual(decisions[0].details["slow_burn_qualified_etw_sessions"], 1)
 
     def test_long_term_low_speed_does_not_ban_on_startup_without_current_window_or_etw(self):
         engine, _ = self.make_engine(
@@ -400,6 +403,68 @@ class EngineTests(unittest.TestCase):
         )
         engine.observe([self.peer(uploaded=0, up_speed=964)], 0)
         self.assertEqual(engine.decisions(0), [])
+
+    def test_long_term_low_speed_ignores_zero_byte_etw_history(self):
+        engine, _ = self.make_engine(
+            min_payload=1024 * 1024,
+            long_term_low_speed_time=900,
+            long_term_low_speed_min_etw_sessions=1,
+            long_term_low_speed_min_etw_bytes=1,
+            long_term_low_speed_min_uploaded=1024 * 1024,
+        )
+        engine.slow_burn_history["1.2.3.4:6881"] = [
+            {
+                "ts": 100.0,
+                "duration": 1051.0,
+                "low": True,
+                "bad": True,
+                "productive": False,
+                "uploaded": 10 * 1024 * 1024,
+                "etw_bytes": 0,
+                "qualified_etw": False,
+            }
+        ]
+        mapper = self.mapper()
+        engine.observe([self.peer(uploaded=0, up_speed=1200)], 0)
+        engine.observe([self.peer(uploaded=393216, up_speed=1300)], 11)
+        self.assertEqual(engine.ingest_etw(EtwReadEvent(ts=11, path=r"\\testshare\Torrents\Movie\file.mkv", size=4096), mapper), 1)
+        self.assertEqual(engine.decisions(11), [])
+
+    def test_long_term_low_speed_is_blocked_by_productive_credit(self):
+        engine, _ = self.make_engine(
+            min_payload=1024 * 1024,
+            long_term_low_speed_time=900,
+            long_term_low_speed_min_etw_sessions=1,
+            long_term_low_speed_min_etw_bytes=256 * 1024 * 1024,
+            long_term_low_speed_min_uploaded=1024 * 1024,
+        )
+        engine.slow_burn_history["1.2.3.4:6881"] = [
+            {
+                "ts": 100.0,
+                "duration": 1051.0,
+                "low": True,
+                "bad": True,
+                "productive": False,
+                "uploaded": 10 * 1024 * 1024,
+                "etw_bytes": 353_959_936,
+                "qualified_etw": True,
+            },
+            {
+                "ts": 101.0,
+                "duration": 60.0,
+                "low": False,
+                "bad": False,
+                "productive": True,
+                "uploaded": 12 * 1024 * 1024,
+                "etw_bytes": 0,
+                "qualified_etw": False,
+            },
+        ]
+        mapper = self.mapper()
+        engine.observe([self.peer(uploaded=0, up_speed=1200)], 0)
+        engine.observe([self.peer(uploaded=393216, up_speed=1300)], 11)
+        self.assertEqual(engine.ingest_etw(EtwReadEvent(ts=11, path=r"\\testshare\Torrents\Movie\file.mkv", size=4096), mapper), 1)
+        self.assertEqual(engine.decisions(11), [])
 
     def test_tiny_current_payload_with_reputation_is_not_near_miss_noise(self):
         engine, _ = self.make_engine(min_payload=1024 * 1024)
@@ -519,6 +584,42 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(decisions[0].reason, "activity-wake-churn")
         self.assertEqual(decisions[0].uploaded_delta, 0)
         self.assertEqual(decisions[0].details["activity_wake_torrent_wake_events"], 2)
+
+    def test_activity_wake_churn_counts_same_endpoint_reconnect_while_torrent_stays_active(self):
+        engine, _ = self.make_engine(
+            low_speed_threshold=16 * 1024,
+            activity_wake_churn_after=8,
+            ip_activity_wake_churn_after=99,
+            ip_activity_wake_churn_window=3600,
+            ip_activity_wake_churn_max_session_time=90,
+            ip_activity_wake_churn_max_single_payload=64 * 1024,
+            ip_activity_wake_churn_max_total_payload=256 * 1024,
+            ip_activity_wake_churn_min_speed=10 * 1024,
+            ip_activity_wake_churn_distinct_ports=3,
+        )
+
+        engine.observe_active_torrents(set())
+        engine.observe([], 0)
+        engine.observe_active_torrents({"abc"})
+        engine.observe([self.peer(uploaded=0, up_speed=64 * 1024, endpoint="1.2.3.4:50001")], 5)
+        engine.close_missing(set(), 6)
+        self.assertEqual(engine.decisions(6), [])
+
+        decisions = []
+        for index in range(2):
+            start = 30 + index * 30
+            engine.observe_active_torrents({"abc"})
+            engine.observe([self.peer(uploaded=0, up_speed=64 * 1024, endpoint="1.2.3.4:50001")], start)
+            engine.close_missing(set(), start + 1)
+            decisions = engine.decisions(start + 1)
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].reason, "activity-wake-churn")
+        self.assertEqual(decisions[0].uploaded_delta, 0)
+        self.assertEqual(decisions[0].details["activity_wake_event_count"], 3)
+        self.assertEqual(decisions[0].details["activity_wake_torrent_wake_events"], 1)
+        self.assertEqual(decisions[0].details["activity_wake_reconnect_wake_events"], 2)
+        self.assertIn("+1 same-endpoint reconnect", decisions[0].details["activity_wake_weight_components"])
 
     def test_activity_wake_churn_does_not_count_passive_torrent_active_transition(self):
         engine, _ = self.make_engine(
@@ -806,6 +907,219 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(near_misses[0]["decision_details"]["activity_wake_confidence"], "high")
         self.assertEqual(near_misses[0]["decision_details"]["activity_wake_zero_upload_etw_events"], 1)
 
+    def test_terminal_piece_repeat_upload_bans_near_complete_peer(self):
+        engine, _ = self.make_engine(
+            terminal_piece_progress=0.999,
+            terminal_piece_ban_after=1,
+            terminal_piece_min_payload=1024,
+            terminal_piece_excess_ratio=1.0,
+        )
+        engine.observe([self.peer(uploaded=0, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 0)
+        engine.observe([self.peer(uploaded=64 * 1024, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 5)
+
+        decisions = engine.decisions(5)
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].reason, "terminal-piece-repeat-upload")
+        self.assertEqual(decisions[0].confidence, "medium")
+        self.assertEqual(decisions[0].details["terminal_piece_event_count"], 1)
+        self.assertEqual(decisions[0].details["terminal_piece_event_sources"], ["session"])
+
+    def test_terminal_piece_repeat_upload_counts_disconnected_peer(self):
+        engine, _ = self.make_engine(
+            terminal_piece_progress=0.999,
+            terminal_piece_ban_after=1,
+            terminal_piece_min_payload=1024,
+            terminal_piece_excess_ratio=1.0,
+        )
+        engine.observe([self.peer(uploaded=0, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 0)
+        engine.observe([self.peer(uploaded=64 * 1024, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 5)
+        engine.close_missing(set(), 6)
+
+        decisions = engine.decisions(6)
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].reason, "terminal-piece-repeat-upload")
+        self.assertEqual(decisions[0].details["terminal_piece_event_count"], 1)
+        self.assertEqual(decisions[0].details["terminal_piece_event_sources"], ["session"])
+        self.assertEqual(engine.state.get_reputation("1.2.3.4:6881")["terminal_piece_session_count"], 1)
+
+    def test_terminal_piece_repeat_upload_does_not_count_session_that_completes(self):
+        engine, _ = self.make_engine(
+            terminal_piece_progress=0.999,
+            terminal_piece_ban_after=1,
+            terminal_piece_min_payload=1024,
+            terminal_piece_excess_ratio=1.0,
+        )
+        engine.observe([self.peer(uploaded=0, up_speed=64 * 1024, progress=0.998, torrent_size=10 * 1024 * 1024)], 0)
+        engine.observe([self.peer(uploaded=64 * 1024, up_speed=64 * 1024, progress=1.0, torrent_size=10 * 1024 * 1024)], 5)
+
+        self.assertEqual(engine.decisions(5), [])
+
+    def test_terminal_piece_repeat_upload_does_not_count_session_at_complete_without_counter_baseline(self):
+        engine, _ = self.make_engine(
+            terminal_piece_progress=0.999,
+            terminal_piece_ban_after=1,
+            terminal_piece_min_payload=1024,
+            terminal_piece_excess_ratio=1.0,
+        )
+        engine.observe([self.peer(uploaded=0, up_speed=64 * 1024, progress=1.0, torrent_size=10 * 1024 * 1024)], 0)
+        engine.observe([self.peer(uploaded=64 * 1024, up_speed=64 * 1024, progress=1.0, torrent_size=10 * 1024 * 1024)], 5)
+
+        self.assertEqual(engine.decisions(5), [])
+
+    def test_terminal_piece_repeat_upload_counts_cumulative_uploaded_across_reconnects(self):
+        engine, _ = self.make_engine(
+            terminal_piece_progress=0.999,
+            terminal_piece_ban_after=3,
+            terminal_piece_min_payload=1024,
+            terminal_piece_excess_ratio=1.0,
+        )
+        engine.observe([self.peer(uploaded=100 * 1024 * 1024, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 0)
+        engine.close_missing(set(), 1)
+        self.assertEqual(engine.decisions(1), [])
+
+        engine.observe([self.peer(uploaded=100 * 1024 * 1024 + 64 * 1024, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 30)
+        engine.close_missing(set(), 31)
+        decisions = engine.decisions(31)
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].reason, "terminal-piece-repeat-upload")
+        self.assertEqual(decisions[0].details["terminal_piece_event_count"], 6)
+        self.assertEqual(decisions[0].details["terminal_piece_event_sources"], ["counter"])
+        self.assertEqual(decisions[0].details["terminal_piece_total_payload"], 64 * 1024)
+        event = engine.terminal_piece_history["1.2.3.4:6881"][0]
+        self.assertEqual(event["session_uploaded_delta"], 0)
+        self.assertEqual(event["counter_uploaded_delta"], 64 * 1024)
+        self.assertEqual(event["uploaded_counter"], 100 * 1024 * 1024 + 64 * 1024)
+
+    def test_terminal_piece_counter_accumulates_sub_bucket_reconnects(self):
+        engine, _ = self.make_engine(
+            terminal_piece_progress=0.999,
+            terminal_piece_ban_after=1,
+            terminal_piece_min_payload=1024,
+            terminal_piece_excess_ratio=1.0,
+        )
+        base = 100 * 1024 * 1024
+        engine.observe([self.peer(uploaded=base, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 0)
+        engine.close_missing(set(), 1)
+        self.assertEqual(engine.decisions(1), [])
+
+        engine.observe([self.peer(uploaded=base + 5 * 1024, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 30)
+        engine.close_missing(set(), 31)
+        self.assertEqual(engine.decisions(31), [])
+
+        engine.observe([self.peer(uploaded=base + 11 * 1024, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 60)
+        engine.close_missing(set(), 61)
+        decisions = engine.decisions(61)
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].reason, "terminal-piece-repeat-upload")
+        self.assertEqual(decisions[0].details["terminal_piece_total_payload"], 11 * 1024)
+
+    def test_terminal_piece_counter_seeds_from_activity_wake_history(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        state = GuardState.load(Path(tmp.name))
+        state.set_activity_wake_history(
+            by_endpoint={
+                "1.2.3.4:6881": [
+                    {
+                        "ts": 10,
+                        "endpoint": "1.2.3.4:6881",
+                        "ip": "1.2.3.4",
+                        "torrent_hash": "abc",
+                        "torrent_name": "Movie",
+                        "progress": 0.999,
+                        "torrent_size": 10 * 1024 * 1024,
+                        "uploaded_last": 100 * 1024 * 1024,
+                    }
+                ]
+            },
+            by_ip={},
+        )
+        config = GuardConfig(
+            threshold_time=10,
+            low_speed_threshold=2048,
+            min_payload=1024,
+            required_confidence="medium",
+            terminal_piece_progress=0.999,
+            terminal_piece_ban_after=3,
+            terminal_piece_min_payload=1024,
+            terminal_piece_excess_ratio=1.0,
+        )
+        engine = DecisionEngine(config, state)
+
+        engine.observe([self.peer(uploaded=100 * 1024 * 1024 + 64 * 1024, up_speed=64 * 1024, progress=0.999, torrent_size=10 * 1024 * 1024)], 30)
+        engine.close_missing(set(), 31)
+        decisions = engine.decisions(31)
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].reason, "terminal-piece-repeat-upload")
+        self.assertEqual(decisions[0].details["terminal_piece_total_payload"], 64 * 1024)
+
+    def test_terminal_piece_counter_remainder_seeds_from_existing_history(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        state = GuardState.load(Path(tmp.name))
+        state.set_terminal_piece_history(
+            {
+                "1.2.3.4:6881": [
+                    {
+                        "endpoint": "1.2.3.4:6881",
+                        "torrent_hash": "abc",
+                        "uploaded_counter": 100 * 1024 + 25 * 1024,
+                        "counter_uploaded_delta": 25 * 1024,
+                        "bucket_size": 10 * 1024,
+                    }
+                ]
+            }
+        )
+        state.set_terminal_piece_counters(
+            {
+                "1.2.3.4:6881|abc": {
+                    "endpoint": "1.2.3.4:6881",
+                    "torrent_hash": "abc",
+                    "uploaded": 100 * 1024 + 40 * 1024,
+                }
+            }
+        )
+        config = GuardConfig(
+            threshold_time=10,
+            low_speed_threshold=2048,
+            min_payload=1024,
+            required_confidence="medium",
+            terminal_piece_progress=0.999,
+        )
+
+        engine = DecisionEngine(config, state)
+
+        counter = engine.terminal_piece_counters["1.2.3.4:6881|abc"]
+        self.assertEqual(counter["counted_uploaded"], 100 * 1024 + 20 * 1024)
+        self.assertEqual(counter["uploaded"], 100 * 1024 + 40 * 1024)
+
+    def test_terminal_piece_repeat_upload_ignores_peer_below_progress_threshold(self):
+        engine, _ = self.make_engine(
+            terminal_piece_progress=0.999,
+            terminal_piece_ban_after=3,
+            terminal_piece_min_payload=1024,
+        )
+        engine.observe([self.peer(uploaded=0, up_speed=64 * 1024, progress=0.998, torrent_size=10 * 1024 * 1024)], 0)
+        engine.observe([self.peer(uploaded=10 * 1024, up_speed=64 * 1024, progress=0.998, torrent_size=10 * 1024 * 1024)], 5)
+
+        self.assertEqual(engine.decisions(5), [])
+
+    def test_terminal_piece_repeat_upload_requires_progress_field(self):
+        engine, _ = self.make_engine(
+            terminal_piece_progress=0.999,
+            terminal_piece_ban_after=3,
+            terminal_piece_min_payload=1024,
+        )
+        engine.observe([self.peer(uploaded=0, up_speed=64 * 1024, progress=None, torrent_size=10 * 1024 * 1024)], 0)
+        engine.observe([self.peer(uploaded=10 * 1024, up_speed=64 * 1024, progress=None, torrent_size=10 * 1024 * 1024)], 5)
+
+        self.assertEqual(engine.decisions(5), [])
+
     def mapper(self) -> PathMapper:
         mapper = PathMapper()
         mapper.update_torrent(
@@ -828,6 +1142,8 @@ class EngineTests(unittest.TestCase):
         up_speed: int = 100,
         endpoint: str = "1.2.3.4:6881",
         ip: str = "1.2.3.4",
+        progress: float | None = None,
+        torrent_size: int = 0,
     ) -> PeerSnapshot:
         return PeerSnapshot(
             torrent_hash="abc",
@@ -838,6 +1154,8 @@ class EngineTests(unittest.TestCase):
             up_speed=up_speed,
             uploaded=uploaded,
             client="test",
+            torrent_size=torrent_size,
+            progress=progress,
             files=("0",),
         )
 

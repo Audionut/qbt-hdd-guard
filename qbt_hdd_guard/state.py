@@ -21,6 +21,7 @@ class GuardState:
                 "by_endpoint": {},
                 "by_ip": {},
             },
+            "slow_burn_history": {},
         }
 
     @classmethod
@@ -202,6 +203,39 @@ class GuardState:
             "by_endpoint": by_endpoint,
             "by_ip": by_ip,
         }
+        self.save()
+
+    def terminal_piece_history(self) -> dict[str, list[dict[str, Any]]]:
+        history = self.data.setdefault("terminal_piece_history", {})
+        if not isinstance(history, dict):
+            history = {}
+            self.data["terminal_piece_history"] = history
+        return history
+
+    def set_terminal_piece_history(self, history: dict[str, list[dict[str, Any]]]) -> None:
+        self.data["terminal_piece_history"] = history
+        self.save()
+
+    def terminal_piece_counters(self) -> dict[str, dict[str, Any]]:
+        counters = self.data.setdefault("terminal_piece_counters", {})
+        if not isinstance(counters, dict):
+            counters = {}
+            self.data["terminal_piece_counters"] = counters
+        return counters
+
+    def set_terminal_piece_counters(self, counters: dict[str, dict[str, Any]]) -> None:
+        self.data["terminal_piece_counters"] = counters
+        self.save()
+
+    def slow_burn_history(self) -> dict[str, list[dict[str, Any]]]:
+        history = self.data.setdefault("slow_burn_history", {})
+        if not isinstance(history, dict):
+            history = {}
+            self.data["slow_burn_history"] = history
+        return history
+
+    def set_slow_burn_history(self, history: dict[str, list[dict[str, Any]]]) -> None:
+        self.data["slow_burn_history"] = history
         self.save()
 
     def seed_activity_wake_history_from_reputation(self) -> None:

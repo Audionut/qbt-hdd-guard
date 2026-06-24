@@ -84,13 +84,19 @@ Default requirements:
 
 ```text
 current low-speed window exists
-historical low-speed time >= 900 seconds
-historical ETW matched sessions >= 100
-historical ETW read bytes >= 256 MiB
-historical uploaded bytes >= 1 MiB
-recent medium/high ETW evidence exists
+rolling slow-burn window = 86400 seconds
+rolling low-speed time >= 900 seconds
+rolling qualified ETW sessions >= 3
+qualified ETW session bytes >= 1 MiB
+rolling ETW read bytes >= 256 MiB
+rolling uploaded bytes >= 4 MiB
+rolling ETW/upload ratio >= 10x
+recent qualified medium/high ETW evidence exists
 not currently productive
+not offset by productive upload credit
 ```
+
+Slow-burn history is separate from broad reputation score. Zero-byte ETW matches do not count as qualified ETW sessions.
 
 ### Burst Reconnect Ban
 
@@ -165,6 +171,28 @@ Activity-wake history is stored in `hdd-guard-state.json`, so restarting the scr
 If an IP is close to the activity-wake bare-IP threshold and has `uploaded=0` with matched ETW reads, `near-miss-audit.jsonl` gets an `ip-activity-wake-churn-near-miss` record for debugging/tuning.
 
 Activity-wake audit details also include `activity_wake_confidence`: `weak`, `medium`, or `high`; peer-local ETW makes it `high`.
+
+## Terminal-Piece Repeat Upload
+
+This catches a different pattern: a peer that reports 99.9%+ completion but keeps receiving more data than its apparent remaining amount.
+
+Defaults:
+
+```text
+--terminal-piece-progress 0.999
+--terminal-piece-ban-after 3
+--terminal-piece-window 7200
+--terminal-piece-min-payload 1MiB
+--terminal-piece-excess-ratio 2.0
+```
+
+The script estimates remaining bytes from qB peer progress and torrent size. One event is counted each time uploaded bytes cross:
+
+```text
+max(1 MiB, estimated_remaining * 2.0)
+```
+
+After 3 events inside the 2-hour window, the exact `IP:port` is banned as `terminal-piece-repeat-upload`. This rule only works if qB exposes peer `progress` in `sync/torrentPeers`; otherwise it stays inactive.
 
 ## Productive Peer Safety
 
